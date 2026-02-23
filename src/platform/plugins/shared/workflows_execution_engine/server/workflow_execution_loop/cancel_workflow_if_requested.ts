@@ -31,21 +31,18 @@ export async function cancelWorkflowIfRequested(
   workflowLogger: IWorkflowEventLogger,
   monitorAbortController?: AbortController
 ): Promise<void> {
-  if (!workflowExecutionState.getWorkflowExecution().cancelRequested) {
+  const execution = workflowExecutionState.getWorkflowExecution();
+  if (!execution.cancelRequested) {
     try {
       const currentExecution = await workflowExecutionRepository.getWorkflowExecutionById(
-        workflowExecutionState.getWorkflowExecution().id,
-        workflowExecutionState.getWorkflowExecution().spaceId
+        execution.id,
+        execution.spaceId
       );
 
       if (!currentExecution?.cancelRequested) {
         return;
       }
     } catch (error) {
-      // If the cancellation check fails (e.g., network timeout, Elasticsearch unavailable),
-      // log the error but don't throw. This prevents infrastructure issues from causing
-      // step execution failures. The workflow will continue executing, and cancellation
-      // will be checked again on the next monitoring cycle.
       workflowLogger.logError(
         'Failed to check workflow cancellation status - continuing execution',
         error instanceof Error ? error : new Error(String(error))

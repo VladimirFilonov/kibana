@@ -9,6 +9,7 @@
 
 import apm from 'elastic-apm-node';
 import { ExecutionStatus } from '@kbn/workflows';
+import { cancelChildExecution, findActiveChildExecutionId } from './cancel_child_execution';
 import { executionFlowLoop } from './execution_flow_loop';
 import { flushState, persistenceLoop } from './persistence_loop';
 import type { WorkflowExecutionLoopParams } from './types';
@@ -67,6 +68,34 @@ export async function workflowExecutionLoop(params: WorkflowExecutionLoopParams)
     finalFlushSpan?.end();
   }
 
+  // Before final save, re-fetch from ES to detect externally-set cancelRequested
+  // (e.g., from cancelWorkflowExecution API) that the monitoring loop may have missed
+  // due to a race with the step finishing first.
+  try {
+    const inMemoryExecution = params.workflowExecutionState.getWorkflowExecution();
+    if (!inMemoryExecution.cancelRequested) {
+      const currentExecution = await params.workflowExecutionRepository.getWorkflowExecutionById(
+        inMemoryExecution.id,
+        inMemoryExecution.spaceId
+      );
+      if (currentExecution?.cancelRequested) {
+        params.workflowExecutionState.updateWorkflowExecution({
+          status: ExecutionStatus.CANCELLED,
+          cancelRequested: true,
+          cancellationReason: currentExecution.cancellationReason,
+          cancelledAt: currentExecution.cancelledAt,
+          cancelledBy: currentExecution.cancelledBy,
+          finishedAt: inMemoryExecution.finishedAt || new Date().toISOString(),
+        });
+      }
+    }
+  } catch (error) {
+    params.workflowLogger.logError(
+      'Failed to check for external cancellation before final save',
+      error instanceof Error ? error : new Error(String(error))
+    );
+  }
+
   // Final save to ensure workflow state is persisted after execution loop
   const finalSaveSpan = apm.startSpan('final save state', 'workflow', 'persistence');
   await params.workflowRuntime.saveState();
@@ -80,4 +109,20 @@ export async function workflowExecutionLoop(params: WorkflowExecutionLoopParams)
   const finalLogFlushSpan = apm.startSpan('final flush logs', 'workflow', 'logging');
   await params.workflowLogger.flushEvents();
   finalLogFlushSpan?.end();
+
+  const finalExecution = params.workflowExecutionState.getWorkflowExecution();
+  if (
+    finalExecution.status === ExecutionStatus.CANCELLED ||
+    finalExecution.status === ExecutionStatus.TIMED_OUT
+  ) {
+    const childExecutionId = findActiveChildExecutionId(params.workflowExecutionState);
+    if (childExecutionId) {
+      await cancelChildExecution(
+        childExecutionId,
+        finalExecution.spaceId,
+        params.workflowExecutionRepository,
+        params.workflowTaskManager
+      );
+    }
+  }
 }
