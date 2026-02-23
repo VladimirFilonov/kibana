@@ -128,6 +128,21 @@ export class WorkflowExecuteSyncStrategy {
         throw new Error(`Sub-workflow execution ${state.executionId} not found`);
       }
 
+      // Treat a pending cancellation as an immediate terminal state so the parent
+      // doesn't keep polling while the child transitions to CANCELLED.
+      if (execution.cancelRequested && !isTerminalStatus(execution.status)) {
+        this.workflowLogger.logInfo(
+          `Sub-workflow ${state.executionId} has cancelRequested, treating as cancelled`
+        );
+        return {
+          status: 'failed',
+          error: new ExecutionError({
+            type: 'Error',
+            message: `Sub-workflow execution cancelled`,
+          }),
+        };
+      }
+
       // Check if execution is complete
       if (isTerminalStatus(execution.status)) {
         this.workflowLogger.logInfo(

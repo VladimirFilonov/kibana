@@ -18,6 +18,10 @@ export async function handleExecutionDelay(
   params: WorkflowExecutionLoopParams,
   stepExecutionRuntime: StepExecutionRuntime
 ) {
+  if (stepExecutionRuntime.abortController.signal.aborted) {
+    return;
+  }
+
   const workflowExecution = params.workflowRuntime.getWorkflowExecution();
 
   if (

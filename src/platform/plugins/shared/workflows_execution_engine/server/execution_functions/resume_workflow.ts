@@ -13,6 +13,10 @@ import type { WorkflowsExecutionEngineConfig } from '../config';
 import type { WorkflowsExecutionEnginePluginStart } from '../types';
 import type { ContextDependencies } from '../workflow_context_manager/types';
 import { workflowExecutionLoop } from '../workflow_execution_loop';
+import {
+  cancelChildExecution,
+  findActiveChildExecutionId,
+} from '../workflow_execution_loop/cancel_child_execution';
 
 export async function resumeWorkflow({
   workflowRunId,
@@ -53,7 +57,20 @@ export async function resumeWorkflow({
     workflowsExecutionEngine
   );
 
-  await workflowRuntime.resume();
+  const shouldContinue = await workflowRuntime.resume();
+  if (!shouldContinue) {
+    const childExecutionId = findActiveChildExecutionId(workflowExecutionState);
+    if (childExecutionId) {
+      await cancelChildExecution(
+        childExecutionId,
+        spaceId,
+        workflowExecutionRepository,
+        workflowTaskManager,
+        'Cancelled due to parent workflow cancellation'
+      );
+    }
+    return;
+  }
 
   await workflowExecutionLoop({
     workflowRuntime,

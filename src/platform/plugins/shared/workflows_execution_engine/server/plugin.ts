@@ -740,17 +740,25 @@ export class WorkflowsExecutionEnginePlugin
           workflowExecution.status
         )
       ) {
-        // Already in a terminal state or being canceled
         return;
       }
 
+      const cancellationTimestamp = new Date().toISOString();
+
+      // Always set CANCELLED immediately regardless of current status.
+      // If the execution is running in-process and saveState() races with this
+      // update (overwriting CANCELLED with WAITING), the resume task will still
+      // detect cancelRequested and re-set CANCELLED.
       await workflowExecutionRepository.updateWorkflowExecution({
         id: workflowExecution.id,
+        status: ExecutionStatus.CANCELLED,
         cancelRequested: true,
         cancellationReason: 'Cancelled by user',
-        cancelledAt: new Date().toISOString(),
+        cancelledAt: cancellationTimestamp,
         cancelledBy: 'system', // TODO: set user if available
+        finishedAt: cancellationTimestamp,
       });
+
       await workflowTaskManager.forceRunIdleTasks(workflowExecution.id);
     };
 
